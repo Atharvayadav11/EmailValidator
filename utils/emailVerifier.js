@@ -60,8 +60,11 @@ function smtpVerify(email, mxServer, fromEmail) {
     };
     
     // Set timeout
-    const setTimeout = () => {
-      clearTimeout(timeoutId);
+    const setupTimeout = () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      
       timeoutId = setTimeout(() => {
         console.log(`[${email}] Connection timed out`);
         socket.destroy();
@@ -124,7 +127,7 @@ function smtpVerify(email, mxServer, fromEmail) {
             break;
         }
         
-        setTimeout();
+        setupTimeout();
       }
     });
     
@@ -136,7 +139,7 @@ function smtpVerify(email, mxServer, fromEmail) {
     // Connect to the SMTP server
     socket.connect(25, mxServer, () => {
       console.log(`[${email}] Connected to ${mxServer}`);
-      setTimeout();
+      setupTimeout();
     });
   });
 }
