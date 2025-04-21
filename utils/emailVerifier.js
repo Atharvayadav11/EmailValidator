@@ -1,14 +1,47 @@
-// utils/emailVerifier.js
+// utils/emailVerifier.js - Updated with catch-all detection
 const dns = require('dns');
 const net = require('net');
 const { promisify } = require('util');
+const CatchAllDomain = require('../models/catchAllDomain');
 
 const resolveMx = promisify(dns.resolveMx);
 
 /**
- * Verify an email using SMTP handshake
- * @param {string} email - The email to verify
- * @param {string} fromEmail - The email to use as sender
+ * Check if domain is a known catch-all domain
+ * @param {string} domain - Domain to check
+ * @returns {Promise<boolean>} - True if domain is a catch-all
+ */
+async function isKnownCatchAllDomain(domain) {
+  const domainRecord = await CatchAllDomain.findOne({ domain });
+  return domainRecord !== null;
+}
+
+/**
+ * Mark domain as catch-all
+ * @param {string} domain - Domain to mark
+ */
+async function markAsCatchAll(domain) {
+  await CatchAllDomain.findOneAndUpdate(
+    { domain },
+    { 
+      $inc: { verificationAttempts: 1 },
+      $set: { lastVerified: new Date() }
+    },
+    { upsert: true }
+  );
+  
+  // Also update any companies with this domain
+  const Company = require('../models/company');
+  await Company.updateMany(
+    { domain },
+    { $set: { isCatchAll: true } }
+  );
+}
+
+/**
+ * Verify email using SMTP handshake
+ * @param {string} email - Email to verify
+ * @param {string} fromEmail - Email to use as sender
  * @returns {Promise<Object>} - Verification result
  */
 async function verifyEmail(email, fromEmail = 'team@emailvalidator.online') {
@@ -16,6 +49,17 @@ async function verifyEmail(email, fromEmail = 'team@emailvalidator.online') {
   
   try {
     console.log(`Starting verification for ${email}`);
+    
+    // Check if domain is known catch-all
+    const isCatchAll = await isKnownCatchAllDomain(domain);
+    if (isCatchAll) {
+      console.log(`${domain} is a known catch-all domain, skipping verification`);
+      return { 
+        valid: false, 
+        reason: 'CATCH_ALL_DOMAIN',
+        details: 'This domain accepts all email addresses and cannot be reliably verified'
+      };
+    }
     
     // Get MX records
     console.log(`Finding MX records for ${domain}...`);
@@ -38,6 +82,42 @@ async function verifyEmail(email, fromEmail = 'team@emailvalidator.online') {
     console.error(`Error verifying ${email}:`, error);
     return { valid: false, reason: 'VERIFICATION_ERROR', details: error.message };
   }
+}
+
+/**
+ * Detect if domain is catch-all by testing random emails
+ * @param {string} domain - Domain to test
+ * @param {string} validEmail - Email already validated
+ * @returns {Promise<boolean>} - True if domain is catch-all
+ */
+async function detectCatchAllDomain(domain, validEmail) {
+  // Generate random email addresses that should not exist
+  const randomEmails = [
+    `nonexistent_${Math.random().toString(36).substring(2)}@${domain}`,
+    `fake_account_${Date.now()}@${domain}`,
+    `test_${Math.random().toString(36).substring(2)}_verify@${domain}`
+  ];
+  
+  console.log(`Testing if ${domain} is a catch-all domain...`);
+  
+  // Test random emails
+  let catchAllCount = 0;
+  for (const randomEmail of randomEmails) {
+    const result = await verifyEmail(randomEmail);
+    if (result.valid) {
+      catchAllCount++;
+      console.log(`Random email ${randomEmail} validated - potential catch-all domain`);
+    }
+  }
+  
+  // If 2 or more random emails validate, consider it a catch-all domain
+  const isCatchAll = catchAllCount >= 2;
+  if (isCatchAll) {
+    console.log(`${domain} is a catch-all domain! (${catchAllCount}/3 random emails validated)`);
+    await markAsCatchAll(domain);
+  }
+  
+  return isCatchAll;
 }
 
 /**
@@ -145,5 +225,7 @@ function smtpVerify(email, mxServer, fromEmail) {
 }
 
 module.exports = {
-  verifyEmail
+  verifyEmail,
+  detectCatchAllDomain,
+  isKnownCatchAllDomain
 };

@@ -1,4 +1,4 @@
-// models/company.js
+// models/company.js - Updated to store more information
 const mongoose = require('mongoose');
 
 const companySchema = new mongoose.Schema({
@@ -12,6 +12,10 @@ const companySchema = new mongoose.Schema({
     type: String,
     required: true,
     trim: true
+  },
+  isCatchAll: {
+    type: Boolean,
+    default: false
   },
   verifiedPatterns: [{
     pattern: {
