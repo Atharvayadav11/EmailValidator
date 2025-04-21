@@ -27,11 +27,3 @@ router.get('/catch-all', getCatchAllDomains);
 
 module.exports = router;
 
-// middleware/validator.js - Updated with new validation
-/**
- * Validate request parameters for email verification
- */
-
-module.exports = {
-  validateEmailLookupRequest
-};
