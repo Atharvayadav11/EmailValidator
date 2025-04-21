@@ -306,9 +306,9 @@ async function findWorkEmail(req, res) {
               }
             });
           }
-          
+          const EARLY_EXIT='true';
           // Early exit after first valid email if not catch-all
-          if (process.env.EARLY_EXIT === 'true') {
+          if (EARLY_EXIT === 'true') {
             break;
           }
         }
