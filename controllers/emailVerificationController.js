@@ -180,11 +180,11 @@ async function findWorkEmail(req, res) {
         const patternType = derivePatternFromEmail(email, firstName, lastName, domain);
         await updateCompanyPattern(company, patternType);
       }
-      
-      // // Early exit if we found at least one valid email
-      // if (verifiedEmails.length > 0 && process.env.EARLY_EXIT === 'true') {
-      //   break;
-      // }
+      const EARLY_EXIT='true';
+      // Early exit if we found at least one valid email
+      if (verifiedEmails.length > 0 && EARLY_EXIT === 'true') {
+        break;
+      }
     }
     
     // Step 5: Return results
