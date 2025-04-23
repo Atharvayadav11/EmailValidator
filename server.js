@@ -3,7 +3,7 @@ const express = require('express');
 const mongoose = require('mongoose');
 const bodyParser = require('body-parser');
 require('dotenv').config();
-
+const cors=require('cors');
 const emailRoutes = require('./routes/emailRoutes');
 
 const app = express();
@@ -11,7 +11,7 @@ const app = express();
 // Middleware
 app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
-
+app.use(cors());
 // Routes
 app.use('/api/email', emailRoutes);
 
