@@ -20,11 +20,11 @@ const IP_BLOCK_PATTERNS = [
     'connection refused'
 ];
 
-// Configure IP Pool
+// Configure IP Pool with actual IP addresses
 const ipPool = new IPPoolManager([
-    'IP1', // Replace with your actual IPs
-    'IP2',
-    'IP3'
+    '108.165.213.192',  // First IP (Propagated)
+    '166.88.142.147',   // Second IP
+    '166.88.142.148'    // Third IP
 ]);
 
 /**

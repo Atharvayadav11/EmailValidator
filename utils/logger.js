@@ -137,8 +137,8 @@ class Logger {
         this.log('IP blocked detected', { ip, domain });
     }
 
-    // Helper method to generate request ID
-    static generateRequestId() {
+    // Change from static to instance method
+    generateRequestId() {
         return `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     }
 
@@ -158,4 +158,6 @@ const logger = new Logger();
 process.on('SIGTERM', () => logger.cleanup());
 process.on('SIGINT', () => logger.cleanup());
 
-module.exports = logger; 
+// Export both the logger instance and the Logger class
+module.exports = logger;
+module.exports.Logger = Logger; 
