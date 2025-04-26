@@ -149,7 +149,7 @@ async function detectCatchAllDomain(domain, validEmail) {
  * @param {string} sourceIP - IP to use for connection
  * @returns {Promise<Object>} - Verification result
  */
-function smtpVerify(email, mxServer, fromEmail, sourceIP, requestId) {
+function smtpVerify(email, mxServer, fromEmail, sourceIP) {
     return new Promise((resolve) => {
         const socket = new net.Socket();
         let responseBuffer = '';
@@ -160,7 +160,7 @@ function smtpVerify(email, mxServer, fromEmail, sourceIP, requestId) {
         const logStep = (stepName, data) => {
             logger.log(`SMTP Step [${email}][${sourceIP}] ${stepName}`, { 
                 data: data.trim(),
-                requestId 
+                sourceIP 
             });
         };
         
@@ -171,7 +171,7 @@ function smtpVerify(email, mxServer, fromEmail, sourceIP, requestId) {
             }
             
             timeoutId = setTimeout(() => {
-                logger.log(`Connection timed out for ${email}`, { sourceIP, requestId });
+                logger.log(`Connection timed out for ${email}`, { sourceIP });
                 socket.destroy();
                 resolve({ valid: false, reason: 'TIMEOUT', sourceIP });
             }, 10000);
@@ -194,8 +194,7 @@ function smtpVerify(email, mxServer, fromEmail, sourceIP, requestId) {
                 
                 if (isBlocked) {
                     logger.blockedIP({
-                        requestId,
-                        ip: sourceIP,
+                        sourceIP,
                         domain: email.split('@')[1],
                         error: response.trim()
                     });
@@ -259,15 +258,13 @@ function smtpVerify(email, mxServer, fromEmail, sourceIP, requestId) {
             
             if (isBlocked) {
                 logger.blockedIP({
-                    requestId,
-                    ip: sourceIP,
+                    sourceIP,
                     domain: email.split('@')[1],
                     error: error.message
                 });
             }
             
             logger.error(error, {
-                requestId,
                 context: {
                     email,
                     sourceIP,
@@ -306,9 +303,9 @@ function smtpVerify(email, mxServer, fromEmail, sourceIP, requestId) {
  * @param {string} fromEmail - Sender email
  * @returns {Promise<Map>} - Map of results for each email pattern
  */
-async function verifyEmailPatterns(emailPatterns, mxServer, fromEmail = 'team@emailvalidator.online', requestId) {
+async function verifyEmailPatterns(emailPatterns, mxServer, fromEmail = 'team@emailvalidator.online') {
     const verifyFn = async (email, ip) => {
-        return await smtpVerify(email, mxServer, fromEmail, ip, requestId);
+        return await smtpVerify(email, mxServer, fromEmail, ip);
     };
     
     return await ipPool.verifyEmailsInParallel(emailPatterns, verifyFn);
