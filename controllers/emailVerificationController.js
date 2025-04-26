@@ -107,8 +107,7 @@ async function savePersonData(personData, company, verifiedEmail, allResults) {
  * Find work email based on personal details
  */
 async function findWorkEmail(req, res) {
-   // Inside findWorkEmail function
-const requestId = `req_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
+    const requestId = Logger.generateRequestId();
     const startTime = Date.now();
     
   try {
