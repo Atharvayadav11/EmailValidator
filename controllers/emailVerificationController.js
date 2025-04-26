@@ -107,6 +107,7 @@ async function savePersonData(personData, company, verifiedEmail, allResults) {
  * Find work email based on personal details
  */
 async function findWorkEmail(req, res) {
+    const requestId = Logger.generateRequestId();
     const startTime = Date.now();
     
   try {
@@ -121,12 +122,20 @@ async function findWorkEmail(req, res) {
       previousCompanies,
       qualifications
     } = req.body;
+        
+        logger.log('Starting email verification', {
+            requestId,
+            firstName,
+            lastName,
+            company: companyName
+        });
     
     // Step 1: Determine domain from provided domain or company name
     let domain;
     try {
       if (providedDomain) {
         domain = providedDomain.toLowerCase().trim();
+                logger.log(`Using provided domain: ${domain}`, { requestId });
       } else {
         // Try to find domain from existing companies
         const existingCompany = await Company.findOne({
@@ -135,6 +144,7 @@ async function findWorkEmail(req, res) {
         
         if (existingCompany) {
           domain = existingCompany.domain;
+                    logger.log(`Found existing domain ${domain} for company ${companyName}`);
         } else {
           // Make an educated guess or use external API
           const potentialDomains = guessDomainFromCompanyName(companyName);
@@ -145,6 +155,7 @@ async function findWorkEmail(req, res) {
               const mxRecords = await resolveMx(potentialDomain);
               if (mxRecords && mxRecords.length > 0) {
                 domain = potentialDomain;
+                                logger.log(`Found domain ${domain} for company ${companyName} via MX lookup`);
                 break;
               }
             } catch (err) {
@@ -162,18 +173,36 @@ async function findWorkEmail(req, res) {
         }
       }
     } catch (error) {
-      const timeTaken = Date.now() - startTime;
+            const timeTaken = Date.now() - startTime;
+            logger.error(error, {
+                requestId,
+                context: {
+                    stage: 'domain_determination',
+                    companyName,
+                    timeTaken
+                }
+            });
+            
       return res.status(500).json({
         success: false,
-        message: 'Error determining company email domain',
-        timeTaken
+                message: 'Error determining company email domain',
+                timeTaken
       });
     }
     
     // Step 2: Check if this is a known catch-all domain
     const catchAllDomain = await CatchAllDomain.findOne({ domain });
     if (catchAllDomain) {
-      const timeTaken = Date.now() - startTime;
+            const timeTaken = Date.now() - startTime;
+            
+            logger.catchall({
+                requestId,
+                domain,
+                company: companyName,
+                detectionMethod: 'database_lookup',
+                timeTaken
+            });
+            
       return res.status(200).json({
         success: false,
         message: 'This domain is a catch-all domain and cannot be reliably verified',
@@ -183,28 +212,28 @@ async function findWorkEmail(req, res) {
           company: companyName,
           domain,
           isCatchAll: true
-        },
-        timeTaken
+                },
+                timeTaken
       });
     }
     
     // Step 3: Get or create company in database
     const company = await findOrCreateCompany(companyName, domain);
     
-    // Step 4: Get MX records for the domain
-    const mxRecords = await resolveMx(domain);
-    if (!mxRecords || mxRecords.length === 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'No MX records found for this domain'
-      });
-    }
-    
-    // Sort MX records by priority
-    mxRecords.sort((a, b) => a.priority - b.priority);
-    const mxRecord = mxRecords[0].exchange;
-    
-    // Step 5: Generate email patterns to test
+        // Step 4: Get MX records for the domain
+        const mxRecords = await resolveMx(domain);
+        if (!mxRecords || mxRecords.length === 0) {
+            return res.status(400).json({
+                success: false,
+                message: 'No MX records found for this domain'
+            });
+        }
+        
+        // Sort MX records by priority
+        mxRecords.sort((a, b) => a.priority - b.priority);
+        const mxRecord = mxRecords[0].exchange;
+        
+        // Step 5: Generate email patterns to test
     let emailsToVerify = [];
     
     if (company.verifiedPatterns.length > 0) {
@@ -220,6 +249,11 @@ async function findWorkEmail(req, res) {
           .replace('{firstInitial}', firstName.charAt(0).toLowerCase())
           .replace('{lastInitial}', lastName.charAt(0).toLowerCase());
       });
+      
+            logger.log(`Using ${emailsToVerify.length} verified patterns from company history`, { 
+                requestId,
+                patternsCount: emailsToVerify.length 
+            });
     }
     
     // Generate more potential patterns if we don't have enough
@@ -232,56 +266,76 @@ async function findWorkEmail(req, res) {
           emailsToVerify.push(email);
         }
       }
-    }
-    
-    // Step 6: Verify emails in parallel using IP pool
-    const { results: verificationResults, foundValidEmail } = await verifyEmailPatterns(
-      emailsToVerify, 
-      mxRecord,
-      'team@emailvalidator.online'
-    );
-    
-    // Process results
-    const validEmails = [];
-    const verifiedPatterns = new Map();
-    
-    for (const [email, result] of verificationResults) {
-      if (result.valid) {
-        validEmails.push({
-          email,
-          sourceIP: result.sourceIP
-        });
-        
-        // Extract and store the pattern
-        const pattern = derivePatternFromEmail(email, firstName, lastName, domain);
-        if (pattern) {
-          verifiedPatterns.set(pattern, (verifiedPatterns.get(pattern) || 0) + 1);
+      
+            logger.log(`Generated ${generatedEmails.length} additional patterns`, { 
+                requestId,
+                patternsCount: generatedEmails.length 
+            });
         }
         
-        // If this is our first valid email, check for catch-all domain
-        if (validEmails.length === 1) {
+        // Step 6: Verify emails in parallel using IP pool
+        logger.log(`Starting parallel verification of ${emailsToVerify.length} email patterns`, { 
+            requestId,
+            patternsCount: emailsToVerify.length 
+        });
+        
+        const { results: verificationResults, foundValidEmail } = await verifyEmailPatterns(
+            emailsToVerify, 
+            mxRecord,
+            'team@emailvalidator.online',
+            requestId
+        );
+        
+        // Process results
+        const validEmails = [];
+        const verifiedPatterns = new Map();
+    
+        for (const [email, result] of verificationResults) {
+            if (result.valid) {
+                validEmails.push({
+        email,
+                    sourceIP: result.sourceIP
+      });
+        
+                // Extract and store the pattern
+                const pattern = derivePatternFromEmail(email, firstName, lastName, domain);
+                if (pattern) {
+                    verifiedPatterns.set(pattern, (verifiedPatterns.get(pattern) || 0) + 1);
+                }
+                
+                // If this is our first valid email, check for catch-all domain
+                if (validEmails.length === 1) {
           const isCatchAll = await detectCatchAllDomain(domain, email);
           
           if (isCatchAll) {
-            const timeTaken = Date.now() - startTime;
+                        const timeTaken = Date.now() - startTime;
+                        
+                        logger.catchall({
+                            requestId,
+                            domain,
+                            company: companyName,
+                            detectionMethod: 'pattern_verification',
+                            timeTaken
+                        });
+            
             return res.json({
               success: false,
               message: 'This domain appears to be a catch-all domain that accepts all emails',
               verifiedEmails: [],
-              attemptedPatterns: Array.from(verificationResults.values()),
+                            attemptedPatterns: Array.from(verificationResults.values()),
               metadata: {
                 firstName,
                 lastName,
                 company: companyName,
                 domain,
                 isCatchAll: true
-              },
-              timeTaken
+                            },
+                            timeTaken
             });
           }
-          
-          // If not a catch-all domain and we're configured for early exit, break here
-          const EARLY_EXIT = 'true';
+                    
+                    // If not a catch-all domain and we're configured for early exit, break here
+                    const EARLY_EXIT = 'true';
           if (EARLY_EXIT === 'true') {
             break;
           }
@@ -289,49 +343,79 @@ async function findWorkEmail(req, res) {
       }
     }
     
-    // Update company patterns
-    for (const [pattern, count] of verifiedPatterns) {
-      await updateCompanyPattern(company, pattern);
-    }
-    
-    // Save person data
-    const personData = {
-      firstName,
-      lastName,
-      company: companyName,
-      currentPosition,
-      phone,
-      educationalInstitute,
-      previousCompanies,
-      qualifications
-    };
-    
-    const verifiedEmail = validEmails.length > 0 ? validEmails[0].email : null;
-    await savePersonData(personData, company, verifiedEmail, Array.from(verificationResults.values()));
-    
-    const timeTaken = Date.now() - startTime;
-    
-    // Return results
-    return res.json({
-      success: validEmails.length > 0,
-      verifiedEmails: validEmails,
-      totalPatternsTested: emailsToVerify.length,
-      patternsTestedBeforeValid: foundValidEmail ? verificationResults.size : null,
-      metadata: {
+        // Update company patterns
+        for (const [pattern, count] of verifiedPatterns) {
+            await updateCompanyPattern(company, pattern);
+        }
+        
+        // Save person data
+      const personData = {
         firstName,
         lastName,
         company: companyName,
-        domain
-      },
-      timeTaken
-    });
-  } catch (error) {
-    const timeTaken = Date.now() - startTime;
+        currentPosition,
+        phone,
+        educationalInstitute,
+        previousCompanies,
+        qualifications
+      };
+      
+        const verifiedEmail = validEmails.length > 0 ? validEmails[0].email : null;
+        await savePersonData(personData, company, verifiedEmail, Array.from(verificationResults.values()));
+        
+        const timeTaken = Date.now() - startTime;
+        
+        if (validEmails.length > 0) {
+            logger.success({
+                requestId,
+                firstName,
+                lastName,
+                company: companyName,
+                verifiedEmail: validEmails[0].email,
+                timeTaken,
+                patternsChecked: verificationResults.size
+            });
+        } else {
+            logger.log('No valid emails found', {
+                requestId,
+          firstName,
+          lastName,
+          company: companyName,
+                patternsChecked: verificationResults.size,
+                timeTaken
+            });
+        }
+        
+        // Return results
+      return res.json({
+            success: validEmails.length > 0,
+            verifiedEmails: validEmails,
+            totalPatternsTested: emailsToVerify.length,
+            patternsTestedBeforeValid: foundValidEmail ? verificationResults.size : null,
+        metadata: {
+          firstName,
+          lastName,
+          company: companyName,
+                domain
+            },
+            timeTaken
+        });
+    } catch (error) {
+        const timeTaken = Date.now() - startTime;
+        
+        logger.error(error, {
+            requestId,
+            context: {
+                stage: 'request_processing',
+                timeTaken
+            }
+        });
+        
     return res.status(500).json({
       success: false,
-      message: 'Internal server error',
-      error: error.message,
-      timeTaken
+            message: 'Internal server error',
+            error: error.message,
+            timeTaken
     });
   }
 }
