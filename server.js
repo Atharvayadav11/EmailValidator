@@ -24,7 +24,7 @@ app.get('/', (req, res) => {
 });
 
 // Connect to MongoDB
-mongoose.connect( 'mongodb+srv://atharvayadav11:ashokvaishali@cluster0.twnwnbu.mongodb.net/EmailValidator?retryWrites=true&w=majority')
+mongoose.connect( 'mongodb+srv://emailvalidator:emailvalidator@cluster0.31jd5.mongodb.net/EmailValidator?retryWrites=true&w=majority')
 .then(() => console.log('MongoDB connected'))
 .catch(err => console.error('MongoDB connection error:', err));
 

@@ -1,10 +1,31 @@
-// utils/emailVerifier.js - Updated with catch-all detection
+// utils/emailVerifier.js - Updated with catch-all detection and IP pool support
 const dns = require('dns');
 const net = require('net');
 const { promisify } = require('util');
 const CatchAllDomain = require('../models/catchAllDomain');
+const IPPoolManager = require('./ipPoolManager');
+const logger = require('./logger');
 
 const resolveMx = promisify(dns.resolveMx);
+
+// IP block detection patterns
+const IP_BLOCK_PATTERNS = [
+    'blocked',
+    'blacklisted',
+    'banned',
+    'denied',
+    'rejected',
+    'spam',
+    'authentication required',
+    'connection refused'
+];
+
+// Configure IP Pool
+const ipPool = new IPPoolManager([
+    'IP1', // Replace with your actual IPs
+    'IP2',
+    'IP3'
+]);
 
 /**
  * Check if domain is a known catch-all domain
@@ -125,107 +146,177 @@ async function detectCatchAllDomain(domain, validEmail) {
  * @param {string} email - The email to verify
  * @param {string} mxServer - MX server to connect to
  * @param {string} fromEmail - Sender email
+ * @param {string} sourceIP - IP to use for connection
  * @returns {Promise<Object>} - Verification result
  */
-function smtpVerify(email, mxServer, fromEmail) {
-  return new Promise((resolve) => {
-    const socket = new net.Socket();
-    let responseBuffer = '';
-    let step = 0;
-    let timeoutId;
-    
-    // Log helper
-    const logStep = (stepName, data) => {
-      console.log(`[${email}] ${stepName}: ${data.trim()}`);
-    };
-    
-    // Set timeout
-    const setupTimeout = () => {
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-      }
-      
-      timeoutId = setTimeout(() => {
-        console.log(`[${email}] Connection timed out`);
-        socket.destroy();
-        resolve({ valid: false, reason: 'TIMEOUT' });
-      }, 10000); // 10 second timeout
-    };
-    
-    // Handle responses
-    socket.on('data', (data) => {
-      clearTimeout(timeoutId);
-      responseBuffer += data.toString();
-      
-      // If we have a complete response (ends with \r\n)
-      if (responseBuffer.endsWith('\r\n')) {
-        const response = responseBuffer;
-        responseBuffer = '';
+function smtpVerify(email, mxServer, fromEmail, sourceIP, requestId) {
+    return new Promise((resolve) => {
+        const socket = new net.Socket();
+        let responseBuffer = '';
+        let step = 0;
+        let timeoutId;
         
-        switch (step) {
-          case 0: // Connected
-            logStep('CONNECT', response);
-            socket.write(`HELO emailvalidator.online\r\n`);
-            step = 1;
-            break;
-            
-          case 1: // HELO sent
-            logStep('HELO', response);
-            socket.write(`MAIL FROM:<${fromEmail}>\r\n`);
-            step = 2;
-            break;
-            
-          case 2: // MAIL FROM sent
-            logStep('MAIL FROM', response);
-            socket.write(`RCPT TO:<${email}>\r\n`);
-            step = 3;
-            break;
-            
-          case 3: // RCPT TO sent
-            logStep('RCPT TO', response);
-            
-            // Check if email exists based on response code
-            if (response.startsWith('250')) {
-              socket.write('QUIT\r\n');
-              resolve({ valid: true });
-            } else if (response.startsWith('550') || response.startsWith('551') || response.startsWith('553')) {
-              socket.write('QUIT\r\n');
-              resolve({ valid: false, reason: 'INVALID_RECIPIENT', details: response.trim() });
-            } else if (response.startsWith('452')) {
-              socket.write('QUIT\r\n');
-              resolve({ valid: false, reason: 'FULL_MAILBOX', details: response.trim() });
-            } else {
-              socket.write('QUIT\r\n');
-              resolve({ valid: false, reason: 'UNKNOWN_ERROR', details: response.trim() });
+        // Log helper
+        const logStep = (stepName, data) => {
+            logger.log(`SMTP Step [${email}][${sourceIP}] ${stepName}`, { 
+                data: data.trim(),
+                requestId 
+            });
+        };
+        
+        // Set timeout
+        const setupTimeout = () => {
+            if (timeoutId) {
+                clearTimeout(timeoutId);
             }
-            step = 4;
-            break;
             
-          case 4: // QUIT sent
-            logStep('QUIT', response);
-            socket.destroy();
-            break;
-        }
+            timeoutId = setTimeout(() => {
+                logger.log(`Connection timed out for ${email}`, { sourceIP, requestId });
+                socket.destroy();
+                resolve({ valid: false, reason: 'TIMEOUT', sourceIP });
+            }, 10000);
+        };
         
-        setupTimeout();
-      }
+        // Handle responses
+        socket.on('data', (data) => {
+            clearTimeout(timeoutId);
+            responseBuffer += data.toString();
+            
+            if (responseBuffer.endsWith('\r\n')) {
+                const response = responseBuffer;
+                responseBuffer = '';
+                
+                // Check for IP blocks in response
+                const lowerResponse = response.toLowerCase();
+                const isBlocked = IP_BLOCK_PATTERNS.some(pattern => 
+                    lowerResponse.includes(pattern.toLowerCase())
+                );
+                
+                if (isBlocked) {
+                    logger.blockedIP({
+                        requestId,
+                        ip: sourceIP,
+                        domain: email.split('@')[1],
+                        error: response.trim()
+                    });
+                }
+                
+                switch (step) {
+                    case 0: // Connected
+                        logStep('CONNECT', response);
+                        socket.write(`HELO emailvalidator.online\r\n`);
+                        step = 1;
+                        break;
+                        
+                    case 1: // HELO sent
+                        logStep('HELO', response);
+                        socket.write(`MAIL FROM:<${fromEmail}>\r\n`);
+                        step = 2;
+                        break;
+                        
+                    case 2: // MAIL FROM sent
+                        logStep('MAIL FROM', response);
+                        socket.write(`RCPT TO:<${email}>\r\n`);
+                        step = 3;
+                        break;
+                        
+                    case 3: // RCPT TO sent
+                        logStep('RCPT TO', response);
+                        
+                        // Check if email exists based on response code
+                        if (response.startsWith('250')) {
+                            socket.write('QUIT\r\n');
+                            resolve({ valid: true, sourceIP });
+                        } else if (response.startsWith('550') || response.startsWith('551') || response.startsWith('553')) {
+                            socket.write('QUIT\r\n');
+                            resolve({ valid: false, reason: 'INVALID_RECIPIENT', details: response.trim(), sourceIP });
+                        } else if (response.startsWith('452')) {
+                            socket.write('QUIT\r\n');
+                            resolve({ valid: false, reason: 'FULL_MAILBOX', details: response.trim(), sourceIP });
+                        } else {
+                            socket.write('QUIT\r\n');
+                            resolve({ valid: false, reason: 'UNKNOWN_ERROR', details: response.trim(), sourceIP });
+                        }
+                        step = 4;
+                        break;
+                        
+                    case 4: // QUIT sent
+                        logStep('QUIT', response);
+                        socket.destroy();
+                        break;
+                }
+                
+                setupTimeout();
+            }
+        });
+        
+        socket.on('error', (error) => {
+            // Check if error indicates IP blocking
+            const errorStr = error.message.toLowerCase();
+            const isBlocked = IP_BLOCK_PATTERNS.some(pattern => 
+                errorStr.includes(pattern.toLowerCase())
+            );
+            
+            if (isBlocked) {
+                logger.blockedIP({
+                    requestId,
+                    ip: sourceIP,
+                    domain: email.split('@')[1],
+                    error: error.message
+                });
+            }
+            
+            logger.error(error, {
+                requestId,
+                context: {
+                    email,
+                    sourceIP,
+                    mxServer,
+                    step
+                }
+            });
+            
+            resolve({ 
+                valid: false, 
+                reason: 'CONNECTION_ERROR', 
+                details: error.message,
+                sourceIP,
+                isBlocked 
+            });
+        });
+        
+        // Connect to the SMTP server using specific source IP
+        const options = {
+            port: 25,
+            host: mxServer,
+            localAddress: sourceIP
+        };
+        
+        socket.connect(options, () => {
+            console.log(`[${email}][${sourceIP}] Connected to ${mxServer}`);
+            setupTimeout();
+        });
     });
+}
+
+/**
+ * Verify multiple email patterns in parallel using IP pool
+ * @param {Array<string>} emailPatterns - List of email patterns to verify
+ * @param {string} mxServer - MX server to connect to
+ * @param {string} fromEmail - Sender email
+ * @returns {Promise<Map>} - Map of results for each email pattern
+ */
+async function verifyEmailPatterns(emailPatterns, mxServer, fromEmail = 'team@emailvalidator.online', requestId) {
+    const verifyFn = async (email, ip) => {
+        return await smtpVerify(email, mxServer, fromEmail, ip, requestId);
+    };
     
-    socket.on('error', (error) => {
-      console.error(`[${email}] Connection error:`, error.message);
-      resolve({ valid: false, reason: 'CONNECTION_ERROR', details: error.message });
-    });
-    
-    // Connect to the SMTP server
-    socket.connect(25, mxServer, () => {
-      console.log(`[${email}] Connected to ${mxServer}`);
-      setupTimeout();
-    });
-  });
+    return await ipPool.verifyEmailsInParallel(emailPatterns, verifyFn);
 }
 
 module.exports = {
   verifyEmail,
+  verifyEmailPatterns,
   detectCatchAllDomain,
   isKnownCatchAllDomain
 };
