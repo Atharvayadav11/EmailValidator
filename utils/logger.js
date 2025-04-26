@@ -137,11 +137,6 @@ class Logger {
         this.log('IP blocked detected', { ip, domain });
     }
 
-    // Change from static to instance method
-    generateRequestId() {
-        return `req_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    }
-
     // Clean up method to close all streams
     cleanup() {
         for (const stream of this.streams.values()) {
@@ -158,6 +153,5 @@ const logger = new Logger();
 process.on('SIGTERM', () => logger.cleanup());
 process.on('SIGINT', () => logger.cleanup());
 
-// Export both the logger instance and the Logger class
-module.exports = logger;
-module.exports.Logger = Logger; 
+// Export just the logger instance
+module.exports = logger; 

@@ -6,6 +6,7 @@ const CatchAllDomain = require('../models/catchAllDomain');
 const { generateEmailPatterns, guessDomainFromCompanyName } = require('../utils/patternGenerator');
 const { verifyEmail, verifyEmailPatterns, detectCatchAllDomain } = require('../utils/emailVerifier');
 const logger = require('../utils/logger');
+const { generateRequestId } = require('../utils/requestIdGenerator');
 const dns = require('dns');
 const { promisify } = require('util');
 
@@ -107,7 +108,7 @@ async function savePersonData(personData, company, verifiedEmail, allResults) {
  * Find work email based on personal details
  */
 async function findWorkEmail(req, res) {
-    const requestId = logger.generateRequestId();
+    const requestId = generateRequestId();
     const startTime = Date.now();
     
     try {
